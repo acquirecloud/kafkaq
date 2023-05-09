@@ -1,0 +1,63 @@
+package kafkaq
+
+import (
+	"context"
+	kvsRedis "github.com/acquirecloud/coreapis/kvs/redis"
+	"github.com/go-redis/redis/v8"
+)
+
+type (
+	// Task abstraction represents a task which may be published to the queue and then consumed
+	// for further processing.
+	Task []byte
+
+	// Job is an object that allows to signal the task completion.
+	Job interface {
+		// Task returns the task for the job.
+		Task() Task
+
+		// Done marks the task as processed, so it will not be re-tried again by a timeout.
+		// If Done() is called before the task timeout fired, the task will not
+		// be executed again. Otherwise, the task can be run in another job.
+		// The function may return an error if the request cannot be executed for a whatever reason.
+		// For this case the task timeout is still in charge and the task may be re-executed
+		// again later.
+		Done() error
+	}
+
+	// TaskPublisher allows to submit a new task into the queue. It separated from the
+	// Queue object cause not all publishers need to consume jobs from the queue.
+	TaskPublisher interface {
+		// Publish places the Task into the queue
+		Publish(Task) error
+	}
+
+	// Queue interface represents the queue object: Tasks may be published to the queue
+	// and retrieved as jobs for processing via GetJob() function. Each task stays in the
+	// queue until it is done for the processing. When a task is retrieved from the queue
+	// the timeout for the task is charged and if the task is not done on the moment when
+	// the timeout is fired, a new job for the task will be returned again until the task
+	// is done.
+	Queue interface {
+		// GetJob returns a job for a submitted task. The call will be blocked until
+		// the task is found or the context is closed. The function will return error
+		// if the task can be retrieved (normally if the ctx is closed)
+		GetJob(ctx context.Context) (Job, error)
+	}
+)
+
+// NewKafkaRedis returns the queue object connected to kafka and redis by the configurations
+// provided. Please be aware that the result object should be initialized and closed
+// via Init() and Shutdown() functions calls respectively.
+func NewKafkaRedis(kafkaCfg KClientConfig, redisOpts *redis.Options) *queue {
+	kvs := kvsRedis.New(redisOpts)
+	kc := newKClient(kafkaCfg)
+	q := NewQueue(kvs, kc, GetDefaultConfig())
+	go func() {
+		select {
+		case <-q.mctx.Done():
+			kc.Close()
+		}
+	}()
+	return q
+}
