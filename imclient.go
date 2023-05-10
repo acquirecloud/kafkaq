@@ -2,8 +2,8 @@ package kafkaq
 
 import (
 	"context"
-	"github.com/acquirecloud/coreapis/golibs/container/iterable"
-	"github.com/acquirecloud/coreapis/golibs/errors"
+	"github.com/acquirecloud/golibs/container/iterable"
+	"github.com/acquirecloud/golibs/errors"
 	"github.com/google/uuid"
 	"sync"
 )

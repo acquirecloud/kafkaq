@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/acquirecloud/coreapis/golibs/cast"
-	"github.com/acquirecloud/coreapis/golibs/container"
-	"github.com/acquirecloud/coreapis/golibs/errors"
+	"github.com/acquirecloud/golibs/cast"
+	"github.com/acquirecloud/golibs/container"
+	"github.com/acquirecloud/golibs/errors"
 	"github.com/segmentio/kafka-go"
 )
 
