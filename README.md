@@ -1,3 +1,4 @@
+![CI](https://github.com/acquirecloud/kafkaq/actions/workflows/ci.yaml/badge.svg)[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/acquirecloud/golibs/blob/main/LICENSE)
 # Simple, reliable, low-latency task queue library in Golang
 Kafkaq is a small Go library for queueing tasks and processing them asynchronously with workers. 
 
