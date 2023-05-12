@@ -1,3 +1,16 @@
+// Copyright 2023 The acquirecloud Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 package kafkaq
 
 import (
@@ -5,10 +18,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/acquirecloud/coreapis/kvs"
 	"github.com/acquirecloud/golibs/cast"
 	context2 "github.com/acquirecloud/golibs/context"
 	"github.com/acquirecloud/golibs/errors"
+	"github.com/acquirecloud/golibs/kvs"
 	"github.com/acquirecloud/golibs/logging"
 	"github.com/google/uuid"
 	"sync"

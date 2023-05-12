@@ -2,7 +2,7 @@
 Kafkaq is a small Go library for queueing tasks and processing them asynchronously with workers. 
 
 High-level overview of how Kafkaq works:
-- A client publishes tasks in the queue (message broker like Kafka).
+- A client publishes tasks in the queue (message broker like Kafka, Red Panda ...).
 - A job executor (worker) polls the queue for tasks to be processed.
 - Acquired tasks states stored in a key-value store to control their execution status. 
 - Unconfirmed tasks are distributed again in the timeout. 
@@ -56,10 +56,10 @@ func main() {
 			DB:       0,  // use default DB
 		})
 	defer q.Shutdown() // q must be shutdown
-	q.Init(context.Background()) // q must be initialized
 	
 	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan bool)
+	done := make(chan struct{})
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -72,7 +72,11 @@ func main() {
 				if err == nil {
 					fmt.Println("worker ", wID, ": executing ", string(j.Task()))
 					j.Done() // commit it
-					c <- true
+					select {
+					case c <- true:
+                    case <- done:
+                        return
+					}
 				}
 			}
 		}(i)
@@ -98,6 +102,7 @@ func main() {
 		fmt.Println("total ", diff, " ", diff/time.Duration(total), " per one request")
 	}
 	cancel()
+	close(done)
 	wg.Wait()
 }
 ```

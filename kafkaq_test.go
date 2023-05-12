@@ -1,3 +1,16 @@
+// Copyright 2023 The acquirecloud Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 package kafkaq
 
 import (
@@ -25,38 +38,50 @@ func __TestNewKafkaRedis(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	c := make(chan bool)
+	done := make(chan bool)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func(wID int) {
+			defer fmt.Println("closing worker ", wID)
 			defer wg.Done()
 			for ctx.Err() == nil {
+				fmt.Println(" worker before getJob ", wID)
 				j, err := q.GetJob(ctx)
+				fmt.Println(" worker after getJob ", wID)
+
 				if err == nil {
 					fmt.Println("worker ", wID, ": executing ", string(j.Task()))
 					j.Done()
-					c <- true
+					select {
+					case c <- true:
+					case <-done:
+						return
+					}
 				}
 			}
 		}(i)
 	}
 
-	start := time.Now()
-	total := 10
+	total := 100
 
-	for i := 0; i < total; i++ {
-		q.Publish(Task(fmt.Sprintf("task %d", i)))
-	}
-	count := 0
-	for count < total {
-		select {
-		case <-c:
-			count++
+	for j := 0; j < 10; j++ {
+		start := time.Now()
+		for i := 0; i < total; i++ {
+			assert.Nil(t, q.Publish(Task(fmt.Sprintf("task %d-%d", j, i))))
 		}
+		count := 0
+		for count < total {
+			select {
+			case <-c:
+				count++
+			}
+		}
+		diff := time.Now().Sub(start)
+		fmt.Println("total ", diff, " ", diff/time.Duration(total), " per one request")
 	}
-	diff := time.Now().Sub(start)
-	fmt.Println("total ", diff, " ", diff/time.Duration(total), " per one request")
 	cancel()
+	close(done)
 	wg.Wait()
 }
