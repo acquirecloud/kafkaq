@@ -4,14 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package kafkaq
+package kafka
 
 import (
 	"context"
@@ -26,14 +26,16 @@ import (
 )
 
 type (
-	KClientConfig struct {
-		Brokers []string
-		GroupID string
+	// kClientConfig struct supports configuration for the Kafka client used by Kafkaq
+	kClientConfig struct {
+		brokers []string
+		// groupID is the name of consumer group which will be used to access to the kafka topics
+		groupID string
 	}
 
 	// kclient is the Kafka client which implements kafkaReadWriter for a consumer Group
 	kclient struct {
-		cfg    KClientConfig
+		cfg    kClientConfig
 		fgcs   atomic.Value // fgClients
 		lock   sync.Mutex
 		closed bool
@@ -58,7 +60,7 @@ type (
 
 var _ kafkaReadWriter = (*kclient)(nil)
 
-func newKClient(cfg KClientConfig) *kclient {
+func newKClient(cfg kClientConfig) *kclient {
 	kc := new(kclient)
 	var err error
 	kc.fgcs.Store(make(fgClients))
@@ -107,8 +109,8 @@ func (kc *kclient) getClient(topic string) (*fgClient, error) {
 		return nil, errors.ErrClosed
 	}
 	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(kc.cfg.Brokers...),
-		kgo.ConsumerGroup(kc.cfg.GroupID),
+		kgo.SeedBrokers(kc.cfg.brokers...),
+		kgo.ConsumerGroup(kc.cfg.groupID),
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(),
 		kgo.AllowAutoTopicCreation(),

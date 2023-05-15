@@ -4,14 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package kafkaq
+package kafka
 
 import (
 	"bytes"
@@ -22,18 +22,32 @@ import (
 	context2 "github.com/acquirecloud/golibs/context"
 	"github.com/acquirecloud/golibs/errors"
 	"github.com/acquirecloud/golibs/kvs"
+	kvsRedis "github.com/acquirecloud/golibs/kvs/redis"
 	"github.com/acquirecloud/golibs/logging"
+	"github.com/acquireclous/kafkaq"
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"sync"
 	"time"
 )
 
 type (
-	// QueueConfig struct defines the configuration which will be used by Queue object to
-	// process tasks
-	QueueConfig struct {
+	// PublisherConfig struct defines the queue publisher configuration
+	PublisherConfig struct {
+		// Brokers contains the list of Kafka brokers
+		Brokers []string
+
+		// GroupID is the name of consumer group which will be used to access to the kafka topics
+		GroupID string
+
 		// Topic the main Kafka topic where all initial tasks are placed
 		Topic string
+	}
+
+	// QueueConfig struct defines the configuration which will be used by the queue object to
+	// process tasks. The QueueConfig extends the PublisherConfig
+	QueueConfig struct {
+		PublisherConfig
 
 		// WaitTopic is the back-up topic, where tasks that are scheduled for a processing
 		// are placed to have an ability to re-execute them in case of a retry is needed
@@ -75,7 +89,7 @@ type (
 	jobCh chan *job
 
 	job struct {
-		t      Task
+		t      kafkaq.Task
 		kvsKey string
 		q      *queue
 	}
@@ -84,7 +98,7 @@ type (
 
 	kafkaMessage struct {
 		key  string
-		task Task
+		task kafkaq.Task
 		ref  any
 	}
 
@@ -97,23 +111,61 @@ type (
 	}
 )
 
-var _ Queue = (*queue)(nil)
-var _ TaskPublisher = (*queue)(nil)
-var _ TaskPublisher = (*publisher)(nil)
+var _ kafkaq.Queue = (*queue)(nil)
+var _ kafkaq.TaskPublisher = (*queue)(nil)
+var _ kafkaq.TaskPublisher = (*publisher)(nil)
 
-// GetDefaultConfig returns a default config for the Queue object
-func GetDefaultConfig() QueueConfig {
+func GetDefaultPublisherConfig() PublisherConfig {
+	return PublisherConfig{
+		Brokers: []string{"localhost:9092"},
+		Topic:   "kqMain",
+		GroupID: "test",
+	}
+}
+
+// GetDefaultQueueConfig returns a default config for the Queue object
+func GetDefaultQueueConfig() QueueConfig {
 	return QueueConfig{
-		Topic:              "kqMain",
+		PublisherConfig:    GetDefaultPublisherConfig(),
 		WaitTopic:          "kqTimeout",
 		Timeout:            time.Minute,
 		DegradationTimeout: time.Hour,
 	}
 }
 
-// NewQueue allows to construct the new queue object. The function expects kvs.Storage and kafkaReadWriter
+// NewKafkaRedis returns the queue object connected to kafka and redis by the configurations
+// provided. Please be aware that the result object should be initialized and closed
+// via Init() and Shutdown() functions calls respectively.
+//
+// NOTE: the result object *queue supports both Queue and TaskPublisher interfaces
+func NewKafkaRedis(cfg QueueConfig, redisOpts *redis.Options) *queue {
+	kvs := kvsRedis.New(redisOpts)
+	kc := newKClient(kClientConfig{brokers: cfg.Brokers, groupID: cfg.GroupID})
+	q := newQueue(kvs, kc, cfg)
+	go func() {
+		select {
+		case <-q.mctx.Done():
+			kc.Close()
+		}
+	}()
+	return q
+}
+
+func NewPublisher(cfg QueueConfig) *publisher {
+	kc := newKClient(kClientConfig{brokers: cfg.Brokers, groupID: cfg.GroupID})
+	p := newPublisher(kc, cfg.Topic)
+	go func() {
+		select {
+		case <-p.mctx.Done():
+			kc.Close()
+		}
+	}()
+	return p
+}
+
+// newQueue allows to construct the new queue object. The function expects kvs.Storage and kafkaReadWriter
 // to be provided to construct the queue object.
-func NewQueue(kvs kvs.Storage, kfClient kafkaReadWriter, cfg QueueConfig) *queue {
+func newQueue(kvs kvs.Storage, kfClient kafkaReadWriter, cfg QueueConfig) *queue {
 	q := new(queue)
 	q.kvs = kvs
 	q.kfClient = kfClient
@@ -127,8 +179,8 @@ func NewQueue(kvs kvs.Storage, kfClient kafkaReadWriter, cfg QueueConfig) *queue
 	return q
 }
 
-// NewPublisher returns the publisher object
-func NewPublisher(kfClient kafkaReadWriter, topic string) *publisher {
+// newPublisher returns the publisher object
+func newPublisher(kfClient kafkaReadWriter, topic string) *publisher {
 	p := new(publisher)
 	p.done = make(chan struct{})
 	p.mctx = context2.WrapChannel(p.done)
@@ -281,7 +333,7 @@ func (q *queue) processMainTopic(ctx context.Context, km kafkaMessage) (*job, er
 	ver := uuid.New()
 	// prepare the task for waiting queue
 	wqt := newTQRec(ver, time.Now().Add(q.cfg.Timeout).UnixMilli(), km.task)
-	if err := q.kfClient.write(ctx, q.cfg.WaitTopic, kafkaMessage{key: km.key, task: Task(wqt)}); err != nil {
+	if err := q.kfClient.write(ctx, q.cfg.WaitTopic, kafkaMessage{key: km.key, task: kafkaq.Task(wqt)}); err != nil {
 		return nil, err
 	}
 
@@ -319,7 +371,7 @@ func (q *queue) processWaitTopic(ctx context.Context, km kafkaMessage) (*job, er
 
 	ver := uuid.New()
 	wqt = newTQRec(ver, time.Now().Add(q.cfg.Timeout).UnixMilli(), wqt.taskUnsafe())
-	if err = q.kfClient.write(ctx, q.cfg.WaitTopic, kafkaMessage{key: km.key, task: Task(wqt)}); err != nil {
+	if err = q.kfClient.write(ctx, q.cfg.WaitTopic, kafkaMessage{key: km.key, task: kafkaq.Task(wqt)}); err != nil {
 		return nil, err
 	}
 	r.ExpiresAt = cast.Ptr(time.Now().Add(q.cfg.DegradationTimeout))
@@ -332,7 +384,7 @@ func (q *queue) processWaitTopic(ctx context.Context, km kafkaMessage) (*job, er
 }
 
 // GetJob is the Queue interface implementation
-func (q *queue) GetJob(ctx context.Context) (Job, error) {
+func (q *queue) GetJob(ctx context.Context) (kafkaq.Job, error) {
 	for {
 		c := q.cpool.Get().(jobCh)
 		select {
@@ -366,7 +418,7 @@ func (q *queue) GetJob(ctx context.Context) (Job, error) {
 }
 
 // Publish is the part of TaskPublisher implementation
-func (q *queue) Publish(task Task) error {
+func (q *queue) Publish(task kafkaq.Task) error {
 	return q.kfClient.write(q.mctx, q.cfg.Topic, kafkaMessage{key: uuid.NewString(), task: task})
 }
 
@@ -387,11 +439,11 @@ func (p *publisher) Shutdown() {
 	close(p.done)
 }
 
-func (p *publisher) Publish(task Task) error {
+func (p *publisher) Publish(task kafkaq.Task) error {
 	return p.kfClient.write(p.mctx, p.topic, kafkaMessage{key: uuid.NewString(), task: task})
 }
 
-func (j *job) Task() Task {
+func (j *job) Task() kafkaq.Task {
 	return j.t
 }
 
@@ -403,7 +455,7 @@ func kvsKey(key string) string {
 	return fmt.Sprintf("/kqtasks/%s", key)
 }
 
-func newTQRec(ver uuid.UUID, tsMilli int64, t Task) tqRec {
+func newTQRec(ver uuid.UUID, tsMilli int64, t kafkaq.Task) tqRec {
 	buf := make([]byte, len(ver)+len(t)+8)
 	copy(buf, ver[:])
 	binary.BigEndian.PutUint64(buf[uuidLen:], uint64(tsMilli))
@@ -431,20 +483,20 @@ func (tr tqRec) tsMillis() int64 {
 	return int64(binary.BigEndian.Uint64(tr[uuidLen:]))
 }
 
-func (tr tqRec) taskUnsafe() Task {
+func (tr tqRec) taskUnsafe() kafkaq.Task {
 	if tr.invalid() {
 		return nil
 	}
-	return Task(tr[uuidLen+8:])
+	return kafkaq.Task(tr[uuidLen+8:])
 }
 
-func (tr tqRec) task() Task {
+func (tr tqRec) task() kafkaq.Task {
 	if tr.invalid() {
 		return nil
 	}
 	res := make([]byte, len(tr)-uuidLen-8)
 	copy(res, tr[uuidLen+8:])
-	return Task(res)
+	return kafkaq.Task(res)
 }
 
 var dummyUUID uuid.UUID

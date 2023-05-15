@@ -4,14 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package kafkaq
+package kafka
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 
 // run it with real envs
 func __TestKClient(t *testing.T) {
-	kc := newKClient(KClientConfig{Brokers: []string{"localhost:9092"}, GroupID: "test"})
+	kc := newKClient(kClientConfig{brokers: []string{"localhost:9092"}, groupID: "test"})
 	defer kc.Close()
 	start := time.Now()
 	count := 10

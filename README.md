@@ -42,22 +42,25 @@ import (
 	"context"
 	"fmt"
 	"github.com/acquireclous/kafkaq"
+	"github.com/acquireclous/kafkaq/pkg/kafka"
 	"github.com/go-redis/redis/v8"
 	"sync"
 	"time"
 )
 
 func main() {
-	// creating the queue client. It allows to publish new tasks and receiving existing ones from the queue 
-	q := kafkaq.NewKafkaRedis(kafkaq.KClientConfig{Brokers: []string{"localhost:9092"}, GroupID: "test"},
+	// creating the queue client. It allows to publish new tasks and receiving existing ones from the queue
+	q := kafka.NewKafkaRedis(kafka.GetDefaultQueueConfig(),
 		// docker options
 		&redis.Options{
 			Addr:     "localhost:6379",
 			Password: "", // no password set
 			DB:       0,  // use default DB
 		})
+	// don't forget to start it...
+	q.Init(context.Background())
 	defer q.Shutdown() // q must be shutdown
-	
+
 	ctx, cancel := context.WithCancel(context.Background())
 	c := make(chan bool)
 	done := make(chan struct{})
@@ -75,8 +78,8 @@ func main() {
 					j.Done() // commit it
 					select {
 					case c <- true:
-                    case <- done:
-                        return
+					case <-done:
+						return
 					}
 				}
 			}

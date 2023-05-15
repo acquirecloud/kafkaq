@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,8 +15,6 @@ package kafkaq
 
 import (
 	"context"
-	kvsRedis "github.com/acquirecloud/golibs/kvs/redis"
-	"github.com/go-redis/redis/v8"
 )
 
 type (
@@ -58,20 +56,3 @@ type (
 		GetJob(ctx context.Context) (Job, error)
 	}
 )
-
-// NewKafkaRedis returns the queue object connected to kafka and redis by the configurations
-// provided. Please be aware that the result object should be initialized and closed
-// via Init() and Shutdown() functions calls respectively.
-func NewKafkaRedis(kafkaCfg KClientConfig, redisOpts *redis.Options) *queue {
-	kvs := kvsRedis.New(redisOpts)
-	kc := newKClient(kafkaCfg)
-	q := NewQueue(kvs, kc, GetDefaultConfig())
-	go func() {
-		select {
-		case <-q.mctx.Done():
-			kc.Close()
-		}
-	}()
-	q.Init(context.Background())
-	return q
-}
