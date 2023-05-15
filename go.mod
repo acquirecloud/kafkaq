@@ -1,4 +1,4 @@
-module github.com/acquireclous/kafkaq
+module github.com/acquirecloud/kafkaq
 
 go 1.20
 
