@@ -24,7 +24,7 @@ import (
 	"github.com/acquirecloud/golibs/kvs"
 	kvsRedis "github.com/acquirecloud/golibs/kvs/redis"
 	"github.com/acquirecloud/golibs/logging"
-	"github.com/acquireclous/kafkaq"
+	"github.com/acquirecloud/kafkaq"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"sync"

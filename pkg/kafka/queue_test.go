@@ -17,7 +17,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/acquirecloud/golibs/kvs/inmem"
-	"github.com/acquireclous/kafkaq"
+	"github.com/acquirecloud/kafkaq"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"sync"

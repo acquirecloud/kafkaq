@@ -41,8 +41,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/acquireclous/kafkaq"
-	"github.com/acquireclous/kafkaq/pkg/kafka"
+	"github.com/acquirecloud/kafkaq"
+	"github.com/acquirecloud/kafkaq/pkg/kafka"
 	"github.com/go-redis/redis/v8"
 	"sync"
 	"time"
