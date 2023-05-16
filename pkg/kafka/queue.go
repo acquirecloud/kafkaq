@@ -152,6 +152,16 @@ func NewKafkaRedis(cfg QueueConfig, redisOpts *redis.Options) *queue {
 	return q
 }
 
+// NewKafkaKVS returns  the queue object connected to kafka and kvs.Storage by the configurations
+// provided. Please be aware that the result object should be initialized and closed
+// via Init() and Shutdown() functions calls respectively.
+//
+// NOTE: the result object *queue supports both Queue and TaskPublisher interfaces
+func NewKafkaKVS(cfg QueueConfig, storage kvs.Storage) *queue {
+	kc := newKClient(kClientConfig{brokers: cfg.Brokers, groupID: cfg.GroupID})
+	return newQueue(storage, kc, cfg)
+}
+
 // NewInMem creates the queue with the inmem clients. The object may be used
 // for testing.
 func NewInMem(cfg QueueConfig) *queue {
