@@ -22,6 +22,7 @@ import (
 	context2 "github.com/acquirecloud/golibs/context"
 	"github.com/acquirecloud/golibs/errors"
 	"github.com/acquirecloud/golibs/kvs"
+	"github.com/acquirecloud/golibs/kvs/inmem"
 	kvsRedis "github.com/acquirecloud/golibs/kvs/redis"
 	"github.com/acquirecloud/golibs/logging"
 	"github.com/acquirecloud/kafkaq"
@@ -149,6 +150,14 @@ func NewKafkaRedis(cfg QueueConfig, redisOpts *redis.Options) *queue {
 		}
 	}()
 	return q
+}
+
+// NewInMem creates the queue with the inmem clients. The object may be used
+// for testing.
+func NewInMem(cfg QueueConfig) *queue {
+	kvs := inmem.New()
+	krw := newIMClient()
+	return newQueue(kvs, krw, cfg)
 }
 
 func NewPublisher(cfg QueueConfig) *publisher {

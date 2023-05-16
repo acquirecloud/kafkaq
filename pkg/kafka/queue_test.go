@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"github.com/acquirecloud/golibs/kvs/inmem"
 	"github.com/acquirecloud/kafkaq"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -157,14 +156,12 @@ func Test_queue_mix(t *testing.T) {
 }
 
 func testQueue() (*queue, *publisher) {
-	kvs := inmem.New()
-	krw := newIMClient()
 	cfg := GetDefaultQueueConfig()
 	cfg.Timeout = 250 * time.Millisecond
-	q := newQueue(kvs, krw, cfg)
+	q := NewInMem(cfg)
 	q.jobExpMs = 100
 	q.Init(nil)
-	p := newPublisher(krw, cfg.Topic)
+	p := newPublisher(q.kfClient, cfg.Topic)
 	return q, p
 }
 
