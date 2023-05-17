@@ -40,6 +40,7 @@ type (
 		fgcs   atomic.Value // fgClients
 		lock   sync.Mutex
 		closed bool
+		flog   *fgLogger
 	}
 
 	mref struct {
@@ -59,7 +60,8 @@ type (
 	}
 
 	fgLogger struct {
-		log logging.Logger
+		level atomic.Value //logging.Level
+		log   logging.Logger
 	}
 )
 
@@ -71,6 +73,8 @@ func newKClient(cfg kClientConfig) *kclient {
 	var err error
 	kc.fgcs.Store(make(fgClients))
 	kc.cfg = cfg
+	kc.flog = &fgLogger{log: logging.NewLogger("franz-go")}
+	kc.flog.level.Store(logging.INFO)
 	if err != nil {
 		panic(fmt.Sprintf("could not creat kclient readers cached: %s", err.Error()))
 	}
@@ -89,6 +93,10 @@ func (kc *kclient) Close() error {
 	}
 	kc.fgcs.Store(make(fgClients))
 	return nil
+}
+
+func (kc *kclient) setInternalLogsLevel(ll logging.Level) {
+	kc.flog.level.Store(ll)
 }
 
 func (kc *kclient) read(ctx context.Context, topic string) (kafkaMessage, error) {
@@ -120,7 +128,7 @@ func (kc *kclient) getClient(topic string) (*fgClient, error) {
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(),
 		kgo.AllowAutoTopicCreation(),
-		kgo.WithLogger(&fgLogger{log: logging.NewLogger("franz-go")}),
+		kgo.WithLogger(kc.flog),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("could not create client for topic=%s: %w", topic, err)
@@ -233,7 +241,7 @@ func (fc *fgClient) close(ctx context.Context) {
 }
 
 func (f *fgLogger) Level() kgo.LogLevel {
-	switch logging.GetLevel() {
+	switch f.level.Load().(logging.Level) {
 	case logging.ERROR:
 		return kgo.LogLevelError
 	case logging.WARN:

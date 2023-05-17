@@ -16,7 +16,6 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"github.com/acquirecloud/golibs/kvs/inmem"
 	"github.com/acquirecloud/golibs/logging"
 	"github.com/acquirecloud/kafkaq"
 	"github.com/go-redis/redis/v8"
@@ -169,14 +168,14 @@ func testQueue() (*queue, *publisher) {
 
 // run it with real envs (uncomment if needed)
 func __TestNewKafkaRedis(t *testing.T) {
-	q := NewKafkaKVS(GetDefaultQueueConfig(), inmem.New())
-	//q := NewKafkaRedis(GetDefaultQueueConfig(),
-	//	// docker options
-	//	&redis.Options{
-	//		Addr:     "localhost:6379",
-	//		Password: "", // no password set
-	//		DB:       0,  // use default DB
-	//	})
+	//q := NewKafkaKVS(GetDefaultQueueConfig(), inmem.New())
+	q := NewKafkaRedis(GetDefaultQueueConfig(),
+		// docker options
+		&redis.Options{
+			Addr:     "localhost:6379",
+			Password: "", // no password set
+			DB:       0,  // use default DB
+		})
 	assert.Nil(t, q.Init(nil))
 	defer q.Shutdown()
 	p := NewPublisher(GetDefaultQueueConfig())
