@@ -17,7 +17,9 @@ import (
 	"context"
 	"fmt"
 	"github.com/acquirecloud/golibs/kvs/inmem"
+	"github.com/acquirecloud/golibs/logging"
 	"github.com/acquirecloud/kafkaq"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
@@ -229,4 +231,25 @@ func __TestNewKafkaRedis(t *testing.T) {
 	cancel()
 	close(done)
 	wg.Wait()
+}
+
+func __TestConsumeEndless(t *testing.T) {
+	logging.SetLevel(logging.TRACE)
+	cfg := GetDefaultQueueConfig()
+	q := NewKafkaRedis(cfg,
+		// docker options
+		&redis.Options{
+			Addr:     "localhost:6379",
+			Password: "", // no password set
+			DB:       0,  // use default DB
+		})
+	assert.Nil(t, q.Init(nil))
+	defer q.Shutdown()
+
+	for {
+		j, err := q.GetJob(context.Background())
+		assert.Nil(t, err)
+		j.Done()
+		fmt.Println(j)
+	}
 }

@@ -1,5 +1,7 @@
 github.com/acquirecloud/golibs v0.3.6 h1:XOugmfqXhZRpsyUHge1NEjaHEyeS0agdPlLX5w2PPsI=
 github.com/acquirecloud/golibs v0.3.6/go.mod h1:s/t1NzhURZuxbb+2SzglqfBUqprUZljsxgF/4s6mKBE=
+github.com/acquirecloud/golibs v0.3.7 h1:x6uM7o1bNiKJVhkcQc5wzeEQZp/mUBKszeNqBLjKXSQ=
+github.com/acquirecloud/golibs v0.3.7/go.mod h1:s/t1NzhURZuxbb+2SzglqfBUqprUZljsxgF/4s6mKBE=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a h1:HbKu58rmZpUGpz5+4FfNmIU+FmZg2P3Xaj2v2bfNWmk=
 github.com/alicebob/miniredis/v2 v2.30.2 h1:lc1UAUT9ZA7h4srlfBmBt2aorm5Yftk9nBjxz7EyY9I=
 github.com/cespare/xxhash/v2 v2.2.0 h1:DC2CZ1Ep5Y4k3ZQ899DldepgrayRUGE6BBZ/cd9Cj44=

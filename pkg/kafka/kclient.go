@@ -21,6 +21,7 @@ import (
 	"github.com/acquirecloud/golibs/logging"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -56,9 +57,14 @@ type (
 		log         logging.Logger
 		lock        sync.Mutex
 	}
+
+	fgLogger struct {
+		log logging.Logger
+	}
 )
 
 var _ kafkaReadWriter = (*kclient)(nil)
+var _ kgo.Logger = (*fgLogger)(nil)
 
 func newKClient(cfg kClientConfig) *kclient {
 	kc := new(kclient)
@@ -114,6 +120,7 @@ func (kc *kclient) getClient(topic string) (*fgClient, error) {
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(),
 		kgo.AllowAutoTopicCreation(),
+		kgo.WithLogger(&fgLogger{log: logging.NewLogger("franz-go")}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("could not create client for topic=%s: %w", topic, err)
@@ -223,4 +230,38 @@ func (fc *fgClient) close(ctx context.Context) {
 		}
 	}
 	cl.Close()
+}
+
+func (f *fgLogger) Level() kgo.LogLevel {
+	switch logging.GetLevel() {
+	case logging.ERROR:
+		return kgo.LogLevelError
+	case logging.WARN:
+		return kgo.LogLevelWarn
+	case logging.INFO:
+		return kgo.LogLevelInfo
+	case logging.DEBUG:
+		return kgo.LogLevelDebug
+	case logging.TRACE:
+		return kgo.LogLevelDebug
+	}
+	return kgo.LogLevelInfo
+}
+
+func (f *fgLogger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
+	var sb strings.Builder
+	sb.WriteString(msg)
+	for i := 0; i < len(keyvals); i += 2 {
+		sb.WriteString(fmt.Sprintf(" %s=%v ", keyvals[i], keyvals[i+1]))
+	}
+	switch level {
+	case kgo.LogLevelError:
+		f.log.Errorf(sb.String())
+	case kgo.LogLevelWarn:
+		f.log.Warnf(sb.String())
+	case kgo.LogLevelInfo:
+		f.log.Infof(sb.String())
+	case kgo.LogLevelDebug:
+		f.log.Debugf(sb.String())
+	}
 }

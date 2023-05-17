@@ -3,7 +3,7 @@ module github.com/acquirecloud/kafkaq
 go 1.20
 
 require (
-	github.com/acquirecloud/golibs v0.3.6
+	github.com/acquirecloud/golibs v0.3.7
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.3.0
 	github.com/stretchr/testify v1.8.2
@@ -26,3 +26,5 @@ require (
 	google.golang.org/protobuf v1.30.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+//replace github.com/acquirecloud/golibs => ../golibs
