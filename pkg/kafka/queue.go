@@ -33,8 +33,9 @@ import (
 )
 
 type (
-	// PublisherConfig struct defines the queue publisher configuration
-	PublisherConfig struct {
+	// QueueConfig struct defines the configuration which will be used by the queue object to
+	// process tasks. The QueueConfig extends the PublisherConfig
+	QueueConfig struct {
 		// Brokers contains the list of Kafka brokers
 		Brokers []string
 
@@ -43,12 +44,6 @@ type (
 
 		// Topic the main Kafka topic where all initial tasks are placed
 		Topic string
-	}
-
-	// QueueConfig struct defines the configuration which will be used by the queue object to
-	// process tasks. The QueueConfig extends the PublisherConfig
-	QueueConfig struct {
-		PublisherConfig
 
 		// WaitTopic is the back-up topic, where tasks that are scheduled for a processing
 		// are placed to have an ability to re-execute them in case of a retry is needed
@@ -63,6 +58,9 @@ type (
 		// time longer that this timeout, the system cannot guarantee the once job execution
 		// due to the lost of the job state. This case a task maybe processed more than once
 		DegradationTimeout time.Duration
+
+		// PublishOnly creates the queue for publishing tasks only
+		PublishOnly bool
 	}
 
 	// queue supports both TaskPubslisher and the Queue interfaces. Please take into account
@@ -80,22 +78,21 @@ type (
 		mctx     context.Context
 	}
 
-	publisher struct {
-		kfClient kafkaReadWriter
-		done     chan struct{}
-		mctx     context.Context
-		topic    string
-	}
-
 	jobCh chan *job
 
 	job struct {
-		t      kafkaq.Task
-		kvsKey string
-		q      *queue
+		t   kafkaq.Task
+		q   *queue
+		jid string
 	}
 
+	// tqRec task queue record. the object is written into the waiting queue
+	// tqRec: [version(16 bytes)|nextExecTimeMillis(8bytes)|task data (variable)]
 	tqRec []byte
+
+	// kRec is the kvs.Storage record
+	// kRec has the following format: [version(16 bytes)|reschedules(4 bytes)|nextExecTimeMillis(8bytes)]
+	kRec []byte
 
 	kafkaMessage struct {
 		key  string
@@ -114,20 +111,14 @@ type (
 
 var _ kafkaq.Queue = (*queue)(nil)
 var _ kafkaq.TaskPublisher = (*queue)(nil)
-var _ kafkaq.TaskPublisher = (*publisher)(nil)
-
-func GetDefaultPublisherConfig() PublisherConfig {
-	return PublisherConfig{
-		Brokers: []string{"localhost:9092"},
-		Topic:   "kqMain",
-		GroupID: "test",
-	}
-}
+var _ kafkaq.JobController = (*queue)(nil)
 
 // GetDefaultQueueConfig returns a default config for the Queue object
 func GetDefaultQueueConfig() QueueConfig {
 	return QueueConfig{
-		PublisherConfig:    GetDefaultPublisherConfig(),
+		Brokers:            []string{"localhost:9092"},
+		Topic:              "kqMain",
+		GroupID:            "test",
 		WaitTopic:          "kqTimeout",
 		Timeout:            time.Minute,
 		DegradationTimeout: time.Hour,
@@ -138,7 +129,7 @@ func GetDefaultQueueConfig() QueueConfig {
 // provided. Please be aware that the result object should be initialized and closed
 // via Init() and Shutdown() functions calls respectively.
 //
-// NOTE: the result object *queue supports both Queue and TaskPublisher interfaces
+// NOTE: the result object *queue supports both JobController, Queue and TaskPublisher interfaces
 func NewKafkaRedis(cfg QueueConfig, redisOpts *redis.Options) *queue {
 	kvs := kvsRedis.New(redisOpts)
 	kc := newKClient(kClientConfig{brokers: cfg.Brokers, groupID: cfg.GroupID})
@@ -156,7 +147,7 @@ func NewKafkaRedis(cfg QueueConfig, redisOpts *redis.Options) *queue {
 // provided. Please be aware that the result object should be initialized and closed
 // via Init() and Shutdown() functions calls respectively.
 //
-// NOTE: the result object *queue supports both Queue and TaskPublisher interfaces
+// NOTE: the result object *queue supports JobController, Queue and TaskPublisher interfaces
 func NewKafkaKVS(cfg QueueConfig, storage kvs.Storage) *queue {
 	kc := newKClient(kClientConfig{brokers: cfg.Brokers, groupID: cfg.GroupID})
 	return newQueue(storage, kc, cfg)
@@ -168,18 +159,6 @@ func NewInMem(cfg QueueConfig) *queue {
 	kvs := inmem.New()
 	krw := newIMClient()
 	return newQueue(kvs, krw, cfg)
-}
-
-func NewPublisher(cfg QueueConfig) *publisher {
-	kc := newKClient(kClientConfig{brokers: cfg.Brokers, groupID: cfg.GroupID})
-	p := newPublisher(kc, cfg.Topic)
-	go func() {
-		select {
-		case <-p.mctx.Done():
-			kc.Close()
-		}
-	}()
-	return p
 }
 
 // newQueue allows to construct the new queue object. The function expects kvs.Storage and kafkaReadWriter
@@ -198,16 +177,6 @@ func newQueue(kvs kvs.Storage, kfClient kafkaReadWriter, cfg QueueConfig) *queue
 	return q
 }
 
-// newPublisher returns the publisher object
-func newPublisher(kfClient kafkaReadWriter, topic string) *publisher {
-	p := new(publisher)
-	p.done = make(chan struct{})
-	p.mctx = context2.WrapChannel(p.done)
-	p.topic = topic
-	p.kfClient = kfClient
-	return p
-}
-
 func newCPool() sync.Pool {
 	return sync.Pool{New: func() any {
 		return make(jobCh)
@@ -216,8 +185,10 @@ func newCPool() sync.Pool {
 
 func (q *queue) Init(_ context.Context) error {
 	q.logger.Infof("Init()")
-	go q.mainTopicReader(q.cfg.Topic)
-	go q.waitTopicReader(q.cfg.WaitTopic)
+	if !q.cfg.PublishOnly {
+		go q.mainTopicReader(q.cfg.Topic)
+		go q.waitTopicReader(q.cfg.WaitTopic)
+	}
 	return nil
 }
 
@@ -295,6 +266,7 @@ func (q *queue) onMessage(ctx context.Context, topic string, km kafkaMessage) er
 					// Signal the task listener that the channel is closed
 					close(c)
 					q.logger.Tracef("could not process kafka message key=%s, will try again to get the job: %s", km.key, err.Error())
+					context2.Sleep(ctx, time.Millisecond*100) // try in 100ms with the same km
 					goto L1
 				}
 				if j == nil {
@@ -348,17 +320,25 @@ func (q *queue) onMessageWaitQueue(ctx context.Context, km kafkaMessage) error {
 	return nil
 }
 
+// processMainTopic tries to write the km state into KVS and to submit the km for future
+// processing. Any returned error indicates that the km must be re-tried late, but no
+// new messages must be tried, before the function starts to return nil for the error.
+//
+// The function may return nil for both result. It indicates that nothing should be done
+// with the km, but next message may be tried.
 func (q *queue) processMainTopic(ctx context.Context, km kafkaMessage) (*job, error) {
 	ver := uuid.New()
 	// prepare the task for waiting queue
-	wqt := newTQRec(ver, time.Now().Add(q.cfg.Timeout).UnixMilli(), km.task)
+	nextExecAt := time.Now().Add(q.cfg.Timeout).UnixMilli()
+	wqt := newTQRec(ver, nextExecAt, km.task)
 	if err := q.kfClient.write(ctx, q.cfg.WaitTopic, kafkaMessage{key: km.key, task: kafkaq.Task(wqt)}); err != nil {
 		return nil, err
 	}
 
-	// remember the active task version in kvs
+	// remember the active task in the kvs
+	kr := newKRec(ver, nextExecAt, 0)
 	kk := kvsKey(km.key)
-	r := kvs.Record{Key: kk, Value: wqt.verBuf(), ExpiresAt: cast.Ptr(time.Now().Add(q.cfg.DegradationTimeout))}
+	r := kvs.Record{Key: kk, Value: kr, ExpiresAt: cast.Ptr(time.Now().Add(q.cfg.DegradationTimeout))}
 	if _, err := q.kvs.Create(ctx, r); err != nil {
 		if errors.Is(err, errors.ErrExist) {
 			// ignore the message
@@ -366,11 +346,11 @@ func (q *queue) processMainTopic(ctx context.Context, km kafkaMessage) (*job, er
 		}
 		return nil, err
 	}
-	return &job{t: km.task, kvsKey: kk, q: q}, nil
+	return &job{t: km.task, q: q, jid: km.key}, nil
 }
 
-// processWaitTopic returns task from the wait queue. It will return an error if the message
-// was not processed properly and should be retried. It may return nil for the job and nil for
+// processWaitTopic returns job for the message from the wait queue. It will return an error if the message
+// was not processed properly and should be re-tried. It may return nil for the job and nil for
 // the error, it means that the message is processed, maybe committed, but no task for the execution
 func (q *queue) processWaitTopic(ctx context.Context, km kafkaMessage) (*job, error) {
 	wqt := tqRec(km.task)
@@ -383,27 +363,32 @@ func (q *queue) processWaitTopic(ctx context.Context, km kafkaMessage) (*job, er
 		}
 		return nil, err
 	}
-	if bytes.Compare(wqt.verBuf(), r.Value) != 0 {
+	kr := kRec(r.Value)
+	if bytes.Compare(wqt.verBuf(), kr.verBuf()) != 0 {
 		// ignore the message
 		return nil, nil
 	}
 
 	ver := uuid.New()
-	wqt = newTQRec(ver, time.Now().Add(q.cfg.Timeout).UnixMilli(), wqt.taskUnsafe())
+	nextRun := time.Now().Add(q.cfg.Timeout).UnixMilli()
+	wqt = newTQRec(ver, nextRun, wqt.taskUnsafe())
 	if err = q.kfClient.write(ctx, q.cfg.WaitTopic, kafkaMessage{key: km.key, task: kafkaq.Task(wqt)}); err != nil {
 		return nil, err
 	}
 	r.ExpiresAt = cast.Ptr(time.Now().Add(q.cfg.DegradationTimeout))
-	r.Value = wqt.verBuf()
+	r.Value = kr.set(ver, nextRun, kr.reschedules()+1)
 	_, err = q.kvs.CasByVersion(ctx, r)
 	if errors.Is(err, errors.ErrConflict) || errors.Is(err, errors.ErrNotExist) {
 		return nil, nil
 	}
-	return &job{t: wqt.task(), kvsKey: kk, q: q}, err
+	return &job{t: wqt.task(), q: q, jid: km.key}, err
 }
 
 // GetJob is the Queue interface implementation
 func (q *queue) GetJob(ctx context.Context) (kafkaq.Job, error) {
+	if q.cfg.PublishOnly {
+		return nil, fmt.Errorf("queue is created for publishing only %w", errors.ErrInvalid)
+	}
 	for {
 		c := q.cpool.Get().(jobCh)
 		select {
@@ -437,29 +422,57 @@ func (q *queue) GetJob(ctx context.Context) (kafkaq.Job, error) {
 }
 
 // Publish is the part of TaskPublisher implementation
-func (q *queue) Publish(task kafkaq.Task) error {
-	return q.kfClient.write(q.mctx, q.cfg.Topic, kafkaMessage{key: uuid.NewString(), task: task})
+func (q *queue) Publish(task kafkaq.Task) (string, error) {
+	id := uuid.NewString()
+	return id, q.kfClient.write(q.mctx, q.cfg.Topic, kafkaMessage{key: id, task: task})
 }
 
-// completeJob marks the job completed
-func (q *queue) completeJob(kk string) error {
+// Get is the part of JobController
+func (q *queue) Get(jid string) (kafkaq.JobInfo, error) {
+	kk := kvsKey(jid)
 	r, err := q.kvs.Get(context.Background(), kk)
 	if err != nil {
-		return err
+		if errors.Is(err, errors.ErrNotExist) {
+			// ignore the message
+			return kafkaq.JobInfo{ID: jid, Status: kafkaq.JobStatusUnknown}, nil
+		}
+		return kafkaq.JobInfo{}, err
 	}
-	ver := uuid.New()
-	r.Value = ver[:]
+	kr := kRec(r.Value)
+	ji := kafkaq.JobInfo{
+		Status:     kafkaq.JobStatusDone,
+		ID:         jid,
+		Rescedules: kr.reschedules(),
+	}
+	if kr.nextRunAtMillis() != 0 {
+		ji.Status = kafkaq.JobStatusProcessing
+		ji.NextExecutionAt = time.UnixMilli(kr.nextRunAtMillis())
+	}
+	return ji, nil
+}
+
+// Cancel is the part of JobController
+func (q *queue) Cancel(jid string) (kafkaq.JobInfo, error) {
+	kk := kvsKey(jid)
+	r, err := q.kvs.Get(context.Background(), kk)
+	if err != nil {
+		q.logger.Debugf("cancelling jid=%s, but got an error: %s", jid, err.Error())
+	}
+	kr := kRec(r.Value)
+	kr = kr.set(uuid.New(), 0, kr.reschedules())
+	r.Key = kk
 	r.ExpiresAt = cast.Ptr(time.Now().Add(q.cfg.DegradationTimeout))
+	r.Value = kr
 	_, err = q.kvs.Put(context.Background(), r)
-	return err
+	return kafkaq.JobInfo{
+		Status:     kafkaq.JobStatusDone,
+		ID:         jid,
+		Rescedules: kr.reschedules(),
+	}, err
 }
 
-func (p *publisher) Shutdown() {
-	close(p.done)
-}
-
-func (p *publisher) Publish(task kafkaq.Task) error {
-	return p.kfClient.write(p.mctx, p.topic, kafkaMessage{key: uuid.NewString(), task: task})
+func (j *job) ID() string {
+	return j.jid
 }
 
 func (j *job) Task() kafkaq.Task {
@@ -467,7 +480,8 @@ func (j *job) Task() kafkaq.Task {
 }
 
 func (j *job) Done() error {
-	return j.q.completeJob(j.kvsKey)
+	_, err := j.q.Cancel(j.jid)
+	return err
 }
 
 func kvsKey(key string) string {
@@ -515,7 +529,7 @@ func (tr tqRec) task() kafkaq.Task {
 	}
 	res := make([]byte, len(tr)-uuidLen-8)
 	copy(res, tr[uuidLen+8:])
-	return kafkaq.Task(res)
+	return res
 }
 
 var dummyUUID uuid.UUID
@@ -523,4 +537,50 @@ var uuidLen = len(dummyUUID)
 
 func (tr tqRec) invalid() bool {
 	return len(tr) < uuidLen+8
+}
+
+// newKRec creates the new kRec object
+func newKRec(ver uuid.UUID, nextRunAtMillis int64, reschedules int) kRec {
+	var kr kRec
+	return kr.set(ver, nextRunAtMillis, reschedules)
+}
+
+// set allows to update the kr fields. It returns updated object (which may be different, then current)
+func (kr kRec) set(ver uuid.UUID, nextRunAtMillis int64, reschedules int) kRec {
+	if len(ver)+12 > len(kr) {
+		kr = make([]byte, len(ver)+12)
+	}
+	copy(kr, ver[:])
+	binary.BigEndian.PutUint32(kr[uuidLen:], uint32(reschedules))
+	binary.BigEndian.PutUint64(kr[uuidLen+4:], uint64(nextRunAtMillis))
+	return kr
+}
+
+func (kr kRec) ver() uuid.UUID {
+	var ver uuid.UUID
+	if len(kr) >= uuidLen {
+		copy(ver[:], kr)
+	}
+	return ver
+}
+
+func (kr kRec) verBuf() []byte {
+	if len(kr) < uuidLen {
+		return nil
+	}
+	return kr[:uuidLen]
+}
+
+func (kr kRec) nextRunAtMillis() int64 {
+	if len(kr) < uuidLen+12 {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(kr[uuidLen+4:]))
+}
+
+func (kr kRec) reschedules() int {
+	if len(kr) < uuidLen+4 {
+		return 0
+	}
+	return int(binary.BigEndian.Uint32(kr[uuidLen:]))
 }

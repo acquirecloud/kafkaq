@@ -15,6 +15,7 @@ package kafkaq
 
 import (
 	"context"
+	"time"
 )
 
 type (
@@ -24,6 +25,9 @@ type (
 
 	// Job is an object that allows to signal the task completion.
 	Job interface {
+		// ID returns the Job ID
+		ID() string
+
 		// Task returns the task for the job.
 		Task() Task
 
@@ -36,11 +40,27 @@ type (
 		Done() error
 	}
 
+	// JobController allows to discover information about jobs in the queue
+	JobController interface {
+		// Get returns the JobInfo for the job ID provided. The function returns
+		// error if the JobInfo may not be obtained for whatever reasons, otherwise
+		// it will return the job status and some information about it
+		Get(jid string) (JobInfo, error)
+
+		// Cancel allows to stop the future job processing by its id. If the job is
+		// not returned for processing yet, it will be not, after the call. If the
+		// job was already done, nothing will happen. The call may be made
+		// in the middle of the job processing, and it will not interrupt it, but it
+		// will affect only further job runs if they are scheduled.
+		Cancel(jid string) (JobInfo, error)
+	}
+
 	// TaskPublisher allows to submit a new task into the queue. It separated from the
 	// Queue object cause not all publishers need to consume jobs from the queue.
 	TaskPublisher interface {
-		// Publish places the Task into the queue
-		Publish(Task) error
+		// Publish places the Task into the queue. The function returns the
+		// new Job ID for the task which will be returned by Queue.GetJob() later
+		Publish(Task) (string, error)
 	}
 
 	// Queue interface represents the queue object: Tasks may be published to the queue
@@ -55,4 +75,38 @@ type (
 		// if the task can be retrieved (normally if the ctx is closed)
 		GetJob(ctx context.Context) (Job, error)
 	}
+
+	// JobStatus contains the status of a job, please see constants below
+	JobStatus int
+
+	// JobInfo contains information about a job
+	JobInfo struct {
+		// ID contains the Job ID
+		ID string
+		// Status contains the known status for the job
+		Status JobStatus
+		// Rescedules contains how many times the job was returned by the rescheduling timeout
+		Rescedules int
+		// NextExecutionAt contains the timestamp when the job will be executed if it will
+		// not be done before it.
+		NextExecutionAt time.Time
+	}
+)
+
+const (
+	// JobStatusUnknown indicates that the job is not seen yet, or it was
+	// done some time ago, so the information about the job is already gone. The
+	// State indicates there is no record about the job, it is not quite possible to say
+	// whether the job ever existed or not seen yet.
+	JobStatusUnknown JobStatus = iota
+
+	// JobStatusProcessing indicates that the job is seen, distributed and not done yet.
+	// This state indicates that the job was selected, but it is not done (for whatever reasons)
+	// yet. The job can be rescheduled and returned for the next run. The information about when
+	// the Job can be run again maybe found in the JobInfo object.
+	JobStatusProcessing
+
+	// JobStatusDone indicates that the job existed, it is done, and the record about it still exists
+	// in the queue.
+	JobStatusDone
 )

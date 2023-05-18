@@ -19,6 +19,7 @@ import (
 	"github.com/acquirecloud/golibs/logging"
 	"github.com/acquirecloud/kafkaq"
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
@@ -30,18 +31,42 @@ func BenchmarkGetChan(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		c := p.Get().(chan kafkaq.Task)
-		p.Put(c)
+		c := p.Get().(jobCh)
+		_ = c
+		//p.Put(c)
 	}
 }
 
 func Test_queue_readwrite(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
+	j, err := q.GetJob(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, task, j.Task())
+
+	assert.Nil(t, j.Done())
+	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.Timeout*2)
+	defer cancel()
+	_, err = q.GetJob(ctx)
+	assert.Equal(t, ctx.Err(), err)
+}
+
+func Test_queue_readwrite2(t *testing.T) {
+	q, p := testQueue()
+	defer q.Shutdown()
+	defer p.Shutdown()
+
+	task := kafkaq.Task("test")
+	_, err := p.Publish(task)
+	assert.Nil(t, err)
+	// for the publish only queue the GetJob should return an error
+	_, err = p.GetJob(context.Background())
+	assert.NotNil(t, err)
+
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, task, j.Task())
@@ -54,12 +79,12 @@ func Test_queue_readwrite(t *testing.T) {
 }
 
 func Test_queue_timeout(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
 	start := time.Now()
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
@@ -81,12 +106,12 @@ func Test_queue_timeout(t *testing.T) {
 }
 
 func Test_queue_setPos(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, task, j.Task())
@@ -100,12 +125,12 @@ func Test_queue_setPos(t *testing.T) {
 }
 
 func Test_queue_batch(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, task, j.Task())
@@ -119,12 +144,12 @@ func Test_queue_batch(t *testing.T) {
 }
 
 func Test_queue_mix(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	for i := 0; i < 1000; i++ {
-		assert.Nil(t, q.Publish(kafkaq.Task(fmt.Sprintf("%d", i))))
+		_, err := q.Publish(kafkaq.Task(fmt.Sprintf("%d", i)))
+		assert.Nil(t, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.Timeout+q.cfg.Timeout/2)
@@ -149,21 +174,92 @@ func Test_queue_mix(t *testing.T) {
 		assert.Nil(t, j.Done())
 		cnt++
 		if cnt <= 1000 {
-			assert.Nil(t, p.Publish(kafkaq.Task(fmt.Sprintf("%d", cnt+1000))))
+			_, err := q.Publish(kafkaq.Task(fmt.Sprintf("%d", cnt+1000)))
+			assert.Nil(t, err)
 		}
 	}
 
 	assert.Equal(t, 1500, cnt)
 }
 
-func testQueue() (*queue, *publisher) {
+func Test_kRec(t *testing.T) {
+	var kr kRec
+	assert.Equal(t, int64(0), kr.nextRunAtMillis())
+	assert.Nil(t, kr.verBuf())
+
+	var ver uuid.UUID
+	kr = ver[:]
+	assert.Equal(t, ver, kr.ver())
+}
+
+func Test_JobInfo(t *testing.T) {
+	q, _ := testQueue()
+	q.cfg.Timeout = time.Millisecond * 100
+	defer q.Shutdown()
+
+	ji, err := q.Get("lala")
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: "lala", Status: kafkaq.JobStatusUnknown}, ji)
+
+	id, err := q.Publish(kafkaq.Task("lalaa"))
+	assert.Nil(t, err)
+	ji, err = q.Get(id)
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: id, Status: kafkaq.JobStatusUnknown}, ji)
+
+	start := time.Now()
+	_, err = q.GetJob(context.Background())
+	assert.Nil(t, err)
+	ji, err = q.Get(id)
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: id, Status: kafkaq.JobStatusProcessing, NextExecutionAt: ji.NextExecutionAt}, ji)
+	assert.True(t, ji.NextExecutionAt.After(start))
+	assert.True(t, ji.NextExecutionAt.Before(time.Now().Add(time.Millisecond*200)))
+
+	time.Sleep(150)
+	j, err := q.GetJob(context.Background())
+	ji1, err := q.Get(j.ID())
+	assert.Nil(t, err)
+	ji.Rescedules = 1
+	ji.NextExecutionAt = ji1.NextExecutionAt
+	assert.Equal(t, ji, ji1)
+
+	j.Done()
+	ji1, _ = q.Get(j.ID())
+	var tm time.Time
+	ji.NextExecutionAt = tm
+	ji.Status = kafkaq.JobStatusDone
+	assert.Equal(t, ji, ji1)
+	ji1, err = q.Get(ji.ID)
+	assert.Nil(t, err)
+	assert.Equal(t, ji, ji1)
+
+	id, err = q.Publish(kafkaq.Task("lalaa"))
+	assert.Nil(t, err)
+	_, err = q.GetJob(context.Background())
+	assert.Nil(t, err)
+
+	ji, err = q.Cancel(id)
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: id, Status: kafkaq.JobStatusDone}, ji)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*150)
+	defer cancel()
+	_, err = q.GetJob(ctx)
+	assert.Equal(t, ctx.Err(), err)
+}
+
+func testQueue() (*queue, *queue) {
 	cfg := GetDefaultQueueConfig()
 	cfg.Timeout = 250 * time.Millisecond
 	q := NewInMem(cfg)
 	q.jobExpMs = 100
 	q.Init(nil)
-	p := newPublisher(q.kfClient, cfg.Topic)
-	return q, p
+	cfg.PublishOnly = true
+	q1 := NewInMem(cfg)
+	q1.kvs = q.kvs
+	q1.kfClient = q.kfClient
+	return q, q1
 }
 
 // run it with real envs (uncomment if needed)
@@ -178,8 +274,6 @@ func __TestNewKafkaRedis(t *testing.T) {
 		})
 	assert.Nil(t, q.Init(nil))
 	defer q.Shutdown()
-	p := NewPublisher(GetDefaultQueueConfig())
-	defer p.Shutdown()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -215,7 +309,8 @@ func __TestNewKafkaRedis(t *testing.T) {
 	for j := 0; j < 10; j++ {
 		start := time.Now()
 		for i := 0; i < total; i++ {
-			assert.Nil(t, p.Publish(kafkaq.Task(fmt.Sprintf("task %d-%d", j, i))))
+			_, err := q.Publish(kafkaq.Task(fmt.Sprintf("task %d-%d", j, i)))
+			assert.Nil(t, err)
 		}
 		count := 0
 		for count < total {
