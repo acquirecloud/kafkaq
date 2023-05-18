@@ -30,18 +30,19 @@ func BenchmarkGetChan(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		c := p.Get().(chan kafkaq.Task)
-		p.Put(c)
+		c := p.Get().(jobCh)
+		_ = c
+		//p.Put(c)
 	}
 }
 
 func Test_queue_readwrite(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, task, j.Task())
@@ -54,12 +55,12 @@ func Test_queue_readwrite(t *testing.T) {
 }
 
 func Test_queue_timeout(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
 	start := time.Now()
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
@@ -81,12 +82,12 @@ func Test_queue_timeout(t *testing.T) {
 }
 
 func Test_queue_setPos(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, task, j.Task())
@@ -100,12 +101,12 @@ func Test_queue_setPos(t *testing.T) {
 }
 
 func Test_queue_batch(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
-	assert.Nil(t, p.Publish(task))
+	_, err := q.Publish(task)
+	assert.Nil(t, err)
 	j, err := q.GetJob(context.Background())
 	assert.Nil(t, err)
 	assert.Equal(t, task, j.Task())
@@ -119,12 +120,12 @@ func Test_queue_batch(t *testing.T) {
 }
 
 func Test_queue_mix(t *testing.T) {
-	q, p := testQueue()
-	defer p.Shutdown()
+	q := testQueue()
 	defer q.Shutdown()
 
 	for i := 0; i < 1000; i++ {
-		assert.Nil(t, q.Publish(kafkaq.Task(fmt.Sprintf("%d", i))))
+		_, err := q.Publish(kafkaq.Task(fmt.Sprintf("%d", i)))
+		assert.Nil(t, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.Timeout+q.cfg.Timeout/2)
@@ -149,25 +150,25 @@ func Test_queue_mix(t *testing.T) {
 		assert.Nil(t, j.Done())
 		cnt++
 		if cnt <= 1000 {
-			assert.Nil(t, p.Publish(kafkaq.Task(fmt.Sprintf("%d", cnt+1000))))
+			_, err := q.Publish(kafkaq.Task(fmt.Sprintf("%d", cnt+1000)))
+			assert.Nil(t, err)
 		}
 	}
 
 	assert.Equal(t, 1500, cnt)
 }
 
-func testQueue() (*queue, *publisher) {
+func testQueue() *queue {
 	cfg := GetDefaultQueueConfig()
 	cfg.Timeout = 250 * time.Millisecond
 	q := NewInMem(cfg)
 	q.jobExpMs = 100
 	q.Init(nil)
-	p := newPublisher(q.kfClient, cfg.Topic)
-	return q, p
+	return q
 }
 
 // run it with real envs (uncomment if needed)
-func __TestNewKafkaRedis(t *testing.T) {
+func TestNewKafkaRedis(t *testing.T) {
 	//q := NewKafkaKVS(GetDefaultQueueConfig(), inmem.New())
 	q := NewKafkaRedis(GetDefaultQueueConfig(),
 		// docker options
@@ -178,8 +179,6 @@ func __TestNewKafkaRedis(t *testing.T) {
 		})
 	assert.Nil(t, q.Init(nil))
 	defer q.Shutdown()
-	p := NewPublisher(GetDefaultQueueConfig())
-	defer p.Shutdown()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -215,7 +214,8 @@ func __TestNewKafkaRedis(t *testing.T) {
 	for j := 0; j < 10; j++ {
 		start := time.Now()
 		for i := 0; i < total; i++ {
-			assert.Nil(t, p.Publish(kafkaq.Task(fmt.Sprintf("task %d-%d", j, i))))
+			_, err := q.Publish(kafkaq.Task(fmt.Sprintf("task %d-%d", j, i)))
+			assert.Nil(t, err)
 		}
 		count := 0
 		for count < total {
