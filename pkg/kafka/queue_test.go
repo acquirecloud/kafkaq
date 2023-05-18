@@ -19,6 +19,7 @@ import (
 	"github.com/acquirecloud/golibs/logging"
 	"github.com/acquirecloud/kafkaq"
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
@@ -158,6 +159,74 @@ func Test_queue_mix(t *testing.T) {
 	assert.Equal(t, 1500, cnt)
 }
 
+func Test_kRec(t *testing.T) {
+	var kr kRec
+	assert.Equal(t, int64(0), kr.nextRunAtMillis())
+	assert.Nil(t, kr.verBuf())
+
+	var ver uuid.UUID
+	kr = ver[:]
+	assert.Equal(t, ver, kr.ver())
+}
+
+func Test_JobInfo(t *testing.T) {
+	q := testQueue()
+	q.cfg.Timeout = time.Millisecond * 100
+	assert.Nil(t, q.Init(nil))
+	defer q.Shutdown()
+
+	ji, err := q.Get("lala")
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: "lala", Status: kafkaq.JobStatusUnknown}, ji)
+
+	id, err := q.Publish(kafkaq.Task("lalaa"))
+	assert.Nil(t, err)
+	ji, err = q.Get(id)
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: id, Status: kafkaq.JobStatusUnknown}, ji)
+
+	start := time.Now()
+	_, err = q.GetJob(context.Background())
+	assert.Nil(t, err)
+	ji, err = q.Get(id)
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: id, Status: kafkaq.JobStatusProcessing, NextExecutionAt: ji.NextExecutionAt}, ji)
+	assert.True(t, ji.NextExecutionAt.After(start))
+	assert.True(t, ji.NextExecutionAt.Before(time.Now().Add(time.Millisecond*200)))
+
+	time.Sleep(150)
+	j, err := q.GetJob(context.Background())
+	ji1, err := q.Get(j.ID())
+	assert.Nil(t, err)
+	ji.Rescedules = 1
+	ji.NextExecutionAt = ji1.NextExecutionAt
+	assert.Equal(t, ji, ji1)
+
+	j.Done()
+	ji1, _ = q.Get(j.ID())
+	var tm time.Time
+	ji.NextExecutionAt = tm
+	ji.Status = kafkaq.JobStatusDone
+	assert.Equal(t, ji, ji1)
+	ji1, err = q.Get(ji.ID)
+	assert.Nil(t, err)
+	assert.Equal(t, ji, ji1)
+
+	id, err = q.Publish(kafkaq.Task("lalaa"))
+	assert.Nil(t, err)
+	_, err = q.GetJob(context.Background())
+	assert.Nil(t, err)
+
+	ji, err = q.Cancel(id)
+	assert.Nil(t, err)
+	assert.Equal(t, kafkaq.JobInfo{ID: id, Status: kafkaq.JobStatusDone}, ji)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*150)
+	defer cancel()
+	_, err = q.GetJob(ctx)
+	assert.Equal(t, ctx.Err(), err)
+}
+
 func testQueue() *queue {
 	cfg := GetDefaultQueueConfig()
 	cfg.Timeout = 250 * time.Millisecond
@@ -168,7 +237,7 @@ func testQueue() *queue {
 }
 
 // run it with real envs (uncomment if needed)
-func TestNewKafkaRedis(t *testing.T) {
+func __TestNewKafkaRedis(t *testing.T) {
 	//q := NewKafkaKVS(GetDefaultQueueConfig(), inmem.New())
 	q := NewKafkaRedis(GetDefaultQueueConfig(),
 		// docker options

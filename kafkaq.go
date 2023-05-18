@@ -25,8 +25,8 @@ type (
 
 	// Job is an object that allows to signal the task completion.
 	Job interface {
-		// Info returns the JobInfo object for the job
-		Info() JobInfo
+		// ID returns the Job ID
+		ID() string
 
 		// Task returns the task for the job.
 		Task() Task

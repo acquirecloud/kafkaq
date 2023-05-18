@@ -29,7 +29,6 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -85,9 +84,8 @@ type (
 
 	job struct {
 		t   kafkaq.Task
-		jid string
 		q   *queue
-		ji  atomic.Value // the job JobInfo
+		jid string
 	}
 
 	// tqRec task queue record. the object is written into the waiting queue
@@ -139,7 +137,7 @@ func GetDefaultQueueConfig() QueueConfig {
 // provided. Please be aware that the result object should be initialized and closed
 // via Init() and Shutdown() functions calls respectively.
 //
-// NOTE: the result object *queue supports both Queue and TaskPublisher interfaces
+// NOTE: the result object *queue supports both JobController, Queue and TaskPublisher interfaces
 func NewKafkaRedis(cfg QueueConfig, redisOpts *redis.Options) *queue {
 	kvs := kvsRedis.New(redisOpts)
 	kc := newKClient(kClientConfig{brokers: cfg.Brokers, groupID: cfg.GroupID})
@@ -354,7 +352,7 @@ func (q *queue) processMainTopic(ctx context.Context, km kafkaMessage) (*job, er
 		}
 		return nil, err
 	}
-	return &job{t: km.task, jid: km.key, q: q}, nil
+	return &job{t: km.task, q: q, jid: km.key}, nil
 }
 
 // processWaitTopic returns job for the message from the wait queue. It will return an error if the message
@@ -389,7 +387,7 @@ func (q *queue) processWaitTopic(ctx context.Context, km kafkaMessage) (*job, er
 	if errors.Is(err, errors.ErrConflict) || errors.Is(err, errors.ErrNotExist) {
 		return nil, nil
 	}
-	return &job{t: wqt.task(), jid: km.key, q: q}, err
+	return &job{t: wqt.task(), q: q, jid: km.key}, err
 }
 
 // GetJob is the Queue interface implementation
@@ -476,8 +474,8 @@ func (q *queue) Cancel(jid string) (kafkaq.JobInfo, error) {
 	}, err
 }
 
-func (j *job) Info() kafkaq.JobInfo {
-	return j.ji.Load().(kafkaq.JobInfo)
+func (j *job) ID() string {
+	return j.jid
 }
 
 func (j *job) Task() kafkaq.Task {
@@ -485,10 +483,7 @@ func (j *job) Task() kafkaq.Task {
 }
 
 func (j *job) Done() error {
-	ji, err := j.q.Cancel(j.jid)
-	if err == nil {
-		j.ji.Store(ji)
-	}
+	_, err := j.q.Cancel(j.jid)
 	return err
 }
 
