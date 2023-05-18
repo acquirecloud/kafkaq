@@ -38,7 +38,7 @@ func BenchmarkGetChan(b *testing.B) {
 }
 
 func Test_queue_readwrite(t *testing.T) {
-	q := testQueue()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
@@ -55,8 +55,31 @@ func Test_queue_readwrite(t *testing.T) {
 	assert.Equal(t, ctx.Err(), err)
 }
 
+func Test_queue_readwrite2(t *testing.T) {
+	q, p := testQueue()
+	defer q.Shutdown()
+	defer p.Shutdown()
+
+	task := kafkaq.Task("test")
+	_, err := p.Publish(task)
+	assert.Nil(t, err)
+	// for the publish only queue the GetJob should return an error
+	_, err = p.GetJob(context.Background())
+	assert.NotNil(t, err)
+
+	j, err := q.GetJob(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, task, j.Task())
+
+	assert.Nil(t, j.Done())
+	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.Timeout*2)
+	defer cancel()
+	_, err = q.GetJob(ctx)
+	assert.Equal(t, ctx.Err(), err)
+}
+
 func Test_queue_timeout(t *testing.T) {
-	q := testQueue()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
@@ -83,7 +106,7 @@ func Test_queue_timeout(t *testing.T) {
 }
 
 func Test_queue_setPos(t *testing.T) {
-	q := testQueue()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
@@ -102,7 +125,7 @@ func Test_queue_setPos(t *testing.T) {
 }
 
 func Test_queue_batch(t *testing.T) {
-	q := testQueue()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	task := kafkaq.Task("test")
@@ -121,7 +144,7 @@ func Test_queue_batch(t *testing.T) {
 }
 
 func Test_queue_mix(t *testing.T) {
-	q := testQueue()
+	q, _ := testQueue()
 	defer q.Shutdown()
 
 	for i := 0; i < 1000; i++ {
@@ -170,9 +193,8 @@ func Test_kRec(t *testing.T) {
 }
 
 func Test_JobInfo(t *testing.T) {
-	q := testQueue()
+	q, _ := testQueue()
 	q.cfg.Timeout = time.Millisecond * 100
-	assert.Nil(t, q.Init(nil))
 	defer q.Shutdown()
 
 	ji, err := q.Get("lala")
@@ -227,13 +249,17 @@ func Test_JobInfo(t *testing.T) {
 	assert.Equal(t, ctx.Err(), err)
 }
 
-func testQueue() *queue {
+func testQueue() (*queue, *queue) {
 	cfg := GetDefaultQueueConfig()
 	cfg.Timeout = 250 * time.Millisecond
 	q := NewInMem(cfg)
 	q.jobExpMs = 100
 	q.Init(nil)
-	return q
+	cfg.PublishOnly = true
+	q1 := NewInMem(cfg)
+	q1.kvs = q.kvs
+	q1.kfClient = q.kfClient
+	return q, q1
 }
 
 // run it with real envs (uncomment if needed)

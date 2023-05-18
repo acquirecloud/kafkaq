@@ -33,8 +33,9 @@ import (
 )
 
 type (
-	// PublisherConfig struct defines the queue publisher configuration
-	PublisherConfig struct {
+	// QueueConfig struct defines the configuration which will be used by the queue object to
+	// process tasks. The QueueConfig extends the PublisherConfig
+	QueueConfig struct {
 		// Brokers contains the list of Kafka brokers
 		Brokers []string
 
@@ -43,12 +44,6 @@ type (
 
 		// Topic the main Kafka topic where all initial tasks are placed
 		Topic string
-	}
-
-	// QueueConfig struct defines the configuration which will be used by the queue object to
-	// process tasks. The QueueConfig extends the PublisherConfig
-	QueueConfig struct {
-		PublisherConfig
 
 		// WaitTopic is the back-up topic, where tasks that are scheduled for a processing
 		// are placed to have an ability to re-execute them in case of a retry is needed
@@ -63,6 +58,9 @@ type (
 		// time longer that this timeout, the system cannot guarantee the once job execution
 		// due to the lost of the job state. This case a task maybe processed more than once
 		DegradationTimeout time.Duration
+
+		// PublishOnly creates the queue for publishing tasks only
+		PublishOnly bool
 	}
 
 	// queue supports both TaskPubslisher and the Queue interfaces. Please take into account
@@ -115,18 +113,12 @@ var _ kafkaq.Queue = (*queue)(nil)
 var _ kafkaq.TaskPublisher = (*queue)(nil)
 var _ kafkaq.JobController = (*queue)(nil)
 
-func GetDefaultPublisherConfig() PublisherConfig {
-	return PublisherConfig{
-		Brokers: []string{"localhost:9092"},
-		Topic:   "kqMain",
-		GroupID: "test",
-	}
-}
-
 // GetDefaultQueueConfig returns a default config for the Queue object
 func GetDefaultQueueConfig() QueueConfig {
 	return QueueConfig{
-		PublisherConfig:    GetDefaultPublisherConfig(),
+		Brokers:            []string{"localhost:9092"},
+		Topic:              "kqMain",
+		GroupID:            "test",
 		WaitTopic:          "kqTimeout",
 		Timeout:            time.Minute,
 		DegradationTimeout: time.Hour,
@@ -193,8 +185,10 @@ func newCPool() sync.Pool {
 
 func (q *queue) Init(_ context.Context) error {
 	q.logger.Infof("Init()")
-	go q.mainTopicReader(q.cfg.Topic)
-	go q.waitTopicReader(q.cfg.WaitTopic)
+	if !q.cfg.PublishOnly {
+		go q.mainTopicReader(q.cfg.Topic)
+		go q.waitTopicReader(q.cfg.WaitTopic)
+	}
 	return nil
 }
 
@@ -392,6 +386,9 @@ func (q *queue) processWaitTopic(ctx context.Context, km kafkaMessage) (*job, er
 
 // GetJob is the Queue interface implementation
 func (q *queue) GetJob(ctx context.Context) (kafkaq.Job, error) {
+	if q.cfg.PublishOnly {
+		return nil, fmt.Errorf("queue is created for publishing only %w", errors.ErrInvalid)
+	}
 	for {
 		c := q.cpool.Get().(jobCh)
 		select {
