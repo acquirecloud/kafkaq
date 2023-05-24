@@ -59,7 +59,8 @@ type (
 		// due to the lost of the job state. This case a task maybe processed more than once
 		DegradationTimeout time.Duration
 
-		// PublishOnly creates the queue for publishing tasks only
+		// PublishOnly creates the queue for publishing tasks only. The queue object
+		// created with the configuration will not support subscribing functionality
 		PublishOnly bool
 	}
 
@@ -429,6 +430,9 @@ func (q *queue) Publish(task kafkaq.Task) (string, error) {
 
 // Get is the part of JobController
 func (q *queue) Get(jid string) (kafkaq.JobInfo, error) {
+	if q.kvs == nil {
+		return kafkaq.JobInfo{}, fmt.Errorf("the queue is not configured for the function: %w", errors.ErrInvalid)
+	}
 	kk := kvsKey(jid)
 	r, err := q.kvs.Get(context.Background(), kk)
 	if err != nil {
@@ -453,6 +457,9 @@ func (q *queue) Get(jid string) (kafkaq.JobInfo, error) {
 
 // Cancel is the part of JobController
 func (q *queue) Cancel(jid string) (kafkaq.JobInfo, error) {
+	if q.kvs == nil {
+		return kafkaq.JobInfo{}, fmt.Errorf("the queue is not configured for the function: %w", errors.ErrInvalid)
+	}
 	kk := kvsKey(jid)
 	r, err := q.kvs.Get(context.Background(), kk)
 	if err != nil {
